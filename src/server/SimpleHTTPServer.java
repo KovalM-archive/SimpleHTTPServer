@@ -1,21 +1,23 @@
 package server;
 
-import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.Socket;
+import java.util.Iterator;
+import java.util.Map;
 import java.util.Scanner;
+import java.util.Set;
 
-public class SimpleHTTPServer extends Thread implements ServerConstants {
+public class SimpleHTTPServer extends Thread implements ServerConstants, HTTPConstants {
     private ServerWorkPanel workPanel;
     private OutputStream outputStream;
     private InputStream inputStream;
     private String clientName;
-    private boolean loggingDebug = true;
+    private SimpleHTTPRequest request;
+    private SimpleHTTPResponse response;
 
     public SimpleHTTPServer(Socket socket, ServerWorkPanel workPanel) throws IOException{
         this.workPanel = workPanel;
@@ -28,25 +30,16 @@ public class SimpleHTTPServer extends Thread implements ServerConstants {
 
     public void run() {
         try {
-            String request, response;
             while (true){
-                request = readRequest();
-                if (request != null && request.length() > 0){
-                    response = getResponseByURL(getURLFromRequest(request));
-                    outputStream.write(response.getBytes());
-                    if (isLoggingDebug()){
-                        workPanel.getTextArea().append("Request from " + clientName + " :\n");
-                        workPanel.getTextArea().append(request + "\n");
-                        workPanel.getTextArea().append("Response to " + clientName + " : \n");
-                        workPanel.getTextArea().append(response);
-                        workPanel.getTextArea().append("\n\n");
-                    }
+                readRequest();
+                if (getRequest() != null){
+                    response = new SimpleHTTPResponse(createContentOfResponse(getRequest()));
+                    outputStream.write(response.getResponseInString().getBytes());
+                    writeDebug();
                 }
             }
         } catch (IOException e) {
             e.printStackTrace();
-        } catch (Throwable throwable) {
-            throwable.printStackTrace();
         } finally {
             try {
                 outputStream.close();
@@ -57,89 +50,69 @@ public class SimpleHTTPServer extends Thread implements ServerConstants {
         }
     }
 
-    private String getResponseByURL(String url) {
-        String response = "";
+    private void writeDebug(){
+        if (!getRequest().getUrl().equals("/favicon.ico")){
+            workPanel.getTextArea().append("Request from " + clientName + " :\n");
+            workPanel.getTextArea().append(request.getRequestInString() + "\n\n");
+            workPanel.getTextArea().append("Response to " + clientName + " : \n");
+            workPanel.getTextArea().append(response.getResponseInString());
+            workPanel.getTextArea().append("\n\n");
+        }
+    }
+
+    private void readRequest() throws IOException {
+        byte buf[] = new byte[1024*1024];
+        int s = inputStream.read(buf);
+        if (s>0){
+            setRequest(new SimpleHTTPRequest(new String(buf, 0, s)));
+        } else{
+            setRequest(null);
+        }
+    }
+
+    private String createContentOfResponse(SimpleHTTPRequest pRequest) {
+        String content = "";
+        String url = pRequest.getUrl().equals("/")?HOME_PAGE:pRequest.getUrl();
         File f = new File(START_DIRECTORY + url);
         try {
             Scanner in = new Scanner(f);
             while (in.hasNext()){
-                response = response + in.nextLine();
+                content = content + in.nextLine();
             }
-            response = getResponse(response);
+            if (POST.equals(pRequest.getRequestType())){
+                content = insertParamsFromMap(content, pRequest.getRequestParams());
+            }
         } catch (FileNotFoundException e) {
             e.printStackTrace();
-            response = getResponse(ERROR_MESSAGE);
+            content = ERROR_MESSAGE;
         }
-        return response;
+        return content;
     }
 
-    private String getResponse(String consist){
-        String response  = "HTTP/1.1 200 OK\r\n" +
-                "Server: Test server\r\n" +
-                "Content-Type: text/html\r\n" +
-                "Content-Length: " + consist.length() + "\r\n" +
-                "Connection: close\r\n\r\n" + consist;
-        return response;
-    }
+    public String insertParamsFromMap(String pContent, Map pParams){
+        String key, value;
+        int indexParam;
+        Set keySet = pParams.keySet();
+        Iterator i = keySet.iterator();
 
-    private String readRequest() throws IOException {
-        BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(inputStream));
-        String request = "", line;
-
-        while(true) {
-            line = bufferedReader.readLine();
-            if(line == null || line.trim().length() == 0) {
-                break;
+        while (i.hasNext()){
+            key = (String) i.next();
+            value = (String) pParams.get(key);
+            key = "${" + key + "}";
+            indexParam = pContent.indexOf(key);
+            if (indexParam>0){
+                pContent = pContent.substring(0, indexParam) +
+                        value +
+                        pContent.substring(indexParam + key.length(), pContent.length());
             }
-            request = request + line + "\n";
         }
-
+        return pContent;
+    }
+    public SimpleHTTPRequest getRequest() {
         return request;
     }
 
-    private String getURLFromRequest(String request){
-        String url = "error.html";
-        if (isGETRequest(request) || isPOSTRequest(request) || isHEADRequest(request)){
-            int l = request.indexOf(32) + 1;
-            int r = l;
-
-            while (request.charAt(r) != 32){
-                r++;
-            }
-            url = request.substring(l, r);
-            if (url.equals("/")){
-                url = HOME_PAGE;
-            }
-            crutch(url);
-        }
-        return url;
-    }
-
-    private boolean isGETRequest(String request) {
-        return request.substring(0, 3).equals(GET)?true:false;
-    }
-
-    private boolean isPOSTRequest(String request) {
-        return request.substring(0, 4).equals(POST)?true:false;
-    }
-
-    private boolean isHEADRequest(String request) {
-        return request.substring(0, 4).equals(HEAD)?true:false;
-    }
-
-    public boolean isLoggingDebug() {
-        return loggingDebug;
-    }
-
-    public void setLoggingDebug(boolean loggingDebug) {
-        this.loggingDebug = loggingDebug;
-    }
-
-    private void crutch(String url){
-        if (url.equals("/favicon.ico")){
-            setLoggingDebug(false);
-        } else {
-            setLoggingDebug(true);
-        }
+    public void setRequest(SimpleHTTPRequest request) {
+        this.request = request;
     }
 }
